@@ -25,3 +25,11 @@ constexpr auto MCP_API_PASSWORD = "";
 constexpr auto MCP_API_REALM = "ESP32-CAM-AI";
 // Optional OTA password for ArduinoOTA updates. Set to empty string to disable OTA updates.
 constexpr auto MCP_OTA_PASSWORD = "ESP32-CAM-AI"; 
+// === Secondary WiFi (optional fallback) ===
+// Leave empty in .env to disable. If non-empty, WiFiMulti will try both networks.
+#ifndef WIFI_SSID2
+#define WIFI_SSID2 ""
+#endif
+#ifndef WIFI_PASSWORD2
+#define WIFI_PASSWORD2 ""
+#endif

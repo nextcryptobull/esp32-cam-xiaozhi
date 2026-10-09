@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <WiFi.h>
+#include <WiFiMulti.h>
 #include <ESPmDNS.h>
 #include <WebServer.h>
 #include <ArduinoOTA.h>
@@ -994,18 +995,44 @@ void setup()
   log_d("CPU Freq: %d Mhz", getCpuFrequencyMhz());
   log_d("Free heap: %d bytes", ESP.getFreeHeap());
 
-  // Configure WiFi for automatic reconnection on disconnect
-  WiFi.setAutoReconnect(true); // Auto-reconnect to the saved AP
-  WiFi.persistent(true);       // Save WiFi config to flash
+  // === TEMPORARY: Scan and print all visible WiFi networks ===
+  log_i("Scanning for WiFi networks...");
+  int n = WiFi.scanNetworks();
+  log_i("Scan done. Found %d networks:", n);
+  for (int i = 0; i < n; ++i) {
+    String encType;
+    switch (WiFi.encryptionType(i)) {
+      case WIFI_AUTH_OPEN: encType = "OPEN"; break;
+      case WIFI_AUTH_WEP: encType = "WEP"; break;
+      case WIFI_AUTH_WPA_PSK: encType = "WPA-PSK"; break;
+      case WIFI_AUTH_WPA2_PSK: encType = "WPA2-PSK"; break;
+      case WIFI_AUTH_WPA_WPA2_PSK: encType = "WPA/WPA2-PSK"; break;
+      case WIFI_AUTH_WPA3_PSK: encType = "WPA3-PSK"; break;
+      case WIFI_AUTH_WPA2_WPA3_PSK: encType = "WPA2/WPA3 MIXED"; break;
+      case WIFI_AUTH_WAPI_PSK: encType = "WAPI-PSK"; break;
+      default: encType = "UNKNOWN (" + String(WiFi.encryptionType(i)) + ")"; break;
+    }
+    log_i("  [%d] SSID: \"%s\" | Ch: %d | RSSI: %d dBm | %s",
+          i + 1,
+          WiFi.SSID(i).c_str(),
+          WiFi.channel(i),
+          WiFi.RSSI(i),
+          encType.c_str());
+  }
+  // =============================================================
 
   log_d("WiFi.begin() with SSID: %s", STR(WIFI_SSID));
   WiFi.begin(STR(WIFI_SSID), STR(WIFI_PASSWORD));
-  auto connection_result = WiFi.waitForConnectResult();
+    log_i("Connecting to WiFi...");
+  log_i("DEBUG: WIFI_SSID macro = '%s' (length: %d)", STR(WIFI_SSID), strlen(STR(WIFI_SSID)));
+  log_i("DEBUG: WIFI_PASSWORD macro = '%s' (length: %d)", STR(WIFI_PASSWORD), strlen(STR(WIFI_PASSWORD)));
+  uint8_t connection_result = WiFi.waitForConnectResult();
   if (connection_result != WL_CONNECTED)
   {
     log_e("Failed to connect to WiFi. Error code: %d. Restarting...", connection_result);
     ESP.restart();
   }
+  log_i("WiFi connected! IP address: %s", WiFi.localIP().toString().c_str());
 
   log_i("Local IP address: %s", WiFi.localIP().toString().c_str());
   log_d("Signal strength: %d dBm", WiFi.RSSI());
