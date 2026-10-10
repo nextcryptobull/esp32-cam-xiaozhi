@@ -20,6 +20,7 @@
 
 #include "board_config.h"
 #include "settings.h"
+#include "xiaozhi_mcp_client.h"
 #include "mcp_schema_tool.h"
 #include "mcp_schema_response.h"
 #include "mcp_schema_error.h"
@@ -41,30 +42,15 @@
 #define STR(x) STR_HELPER(x)
 
 static const std::map<std::string, framesize_t> frame_sizes = {
-    {"QQVGA (160x120)", FRAMESIZE_QQVGA},
-    {"QCIF (176x144)", FRAMESIZE_QCIF},
-    {"HQVGA (240x176)", FRAMESIZE_HQVGA},
-    {"240x240", FRAMESIZE_240X240},
     {"QVGA (320x240)", FRAMESIZE_QVGA},
-    {"CIF (400x296)", FRAMESIZE_CIF},
-    {"HVGA (480x320)", FRAMESIZE_HVGA},
     {"VGA (640x480)", FRAMESIZE_VGA},
     {"SVGA (800x600)", FRAMESIZE_SVGA},
-    {"XGA (1024x768)", FRAMESIZE_XGA},
-    {"HD (1280x720)", FRAMESIZE_HD},
-    {"SXGA (1280x1024)", FRAMESIZE_SXGA},
-    {"UXGA (1600x1200)", FRAMESIZE_UXGA}};
+    {"HD (1280x720)", FRAMESIZE_HD}};
 
 static const std::map<std::string, pixformat_t> pixel_formats = {
-    {"RGB565", PIXFORMAT_RGB565},
-    {"YUV422", PIXFORMAT_YUV422},
-    {"YUV420", PIXFORMAT_YUV420},
-    {"Grayscale", PIXFORMAT_GRAYSCALE},
     {"JPEG", PIXFORMAT_JPEG},
-    {"RGB888", PIXFORMAT_RGB888},
-    {"RAW", PIXFORMAT_RAW},
-    {"RGB444", PIXFORMAT_RGB444},
-    {"RGB555", PIXFORMAT_RGB555}};
+    {"RGB565", PIXFORMAT_RGB565},
+    {"Grayscale", PIXFORMAT_GRAYSCALE}};
 
 static const std::map<std::string, int> camera_wb_modes = {
     {"Auto", 0},
@@ -195,6 +181,10 @@ WebServer server;
 // Hex-encoded MAC address (Arduino boundary: ESP.getEfuseMac() -> hex String) used for a unique mDNS hostname.
 auto macAddress = std::string(String(ESP.getEfuseMac(), 16).c_str());
 auto thingName = "esp-" + macAddress;
+XiaozhiMcpClient xiaozhiMcpClient;
+
+// Forward declaration ? server task runs on core 0
+void serverTask(void* parameter);
 
 // Configured MCP API credentials from settings.h.
 static const std::string mcp_api_user(MCP_API_USER);
@@ -323,7 +313,7 @@ void handle_tools_list(mcp_response &response)
                           "max_alloc_heap_bytes (integer), cpu_frequency_mhz (integer), flash_size_bytes (integer), "
                           "flash_speed_hz (integer), sketch_size_bytes (integer), free_sketch_space_bytes (integer), "
                           "sdk_version (string), reset_reason (integer), camera_initialized (boolean), "
-                          "internal_temperature_c (number, °C; only on boards with an internal temperature sensor)");
+                          "internal_temperature_c (number, ??C; only on boards with an internal temperature sensor)");
 
   // Add GPIO control tool. The usable pins depend on the selected board, so the
   // list is resolved here; the strings are static because the const char* handed
@@ -502,7 +492,7 @@ void tool_capture(JsonObject arguments, mcp_response &response)
       .pixel_format = MCP_CAPTURE_PIXELFORMAT,
       .frame_size = MCP_CAPTURE_FRAMESIZE,
       .jpeg_quality = MCP_CAPTURE_JPEG_QUALITY,
-      .fb_count = CAMERA_CONFIG_FB_COUNT,
+      .fb_count = 1,  // Reduced from 2 to free RAM for WebSocket TLS
       .fb_location = CAMERA_CONFIG_FB_LOCATION,
       .sccb_i2c_port = CAMERA_CONFIG_SCCB_I2C_PORT};
 
@@ -667,7 +657,7 @@ void tool_system_status(mcp_response &response)
   // Not every board has a usable internal temperature sensor
   auto celsius = temperatureRead();
   if (!std::isnan(celsius))
-    text += "Internal Temperature: " + std::string(String(celsius, 2).c_str()) + " °C\n";
+    text += "Internal Temperature: " + std::string(String(celsius, 2).c_str()) + " ??C\n";
 
   // Text summary plus the parameters individually as structuredContent (MCP 2025-06-18+)
   mcp_response_schema r(response);
@@ -1021,18 +1011,46 @@ void setup()
   }
   // =============================================================
 
-  log_d("WiFi.begin() with SSID: %s", STR(WIFI_SSID));
-  WiFi.begin(STR(WIFI_SSID), STR(WIFI_PASSWORD));
-    log_i("Connecting to WiFi...");
-  log_i("DEBUG: WIFI_SSID macro = '%s' (length: %d)", STR(WIFI_SSID), strlen(STR(WIFI_SSID)));
-  log_i("DEBUG: WIFI_PASSWORD macro = '%s' (length: %d)", STR(WIFI_PASSWORD), strlen(STR(WIFI_PASSWORD)));
-  uint8_t connection_result = WiFi.waitForConnectResult();
+    // === Multi-WiFi support (3 networks) ===
+  WiFiMulti wifiMulti;
+
+  log_d("Adding primary WiFi: %s", STR(WIFI_SSID));
+  wifiMulti.addAP(STR(WIFI_SSID), STR(WIFI_PASSWORD));
+
+  #ifdef WIFI_SSID2
+    if (strlen(STR(WIFI_SSID2)) > 0)
+    {
+      log_d("Adding secondary WiFi: %s", STR(WIFI_SSID2));
+      wifiMulti.addAP(STR(WIFI_SSID2), STR(WIFI_PASSWORD2));
+    }
+  #endif
+
+  #ifdef WIFI_SSID3
+    if (strlen(STR(WIFI_SSID3)) > 0)
+    {
+      log_d("Adding tertiary WiFi: %s", STR(WIFI_SSID3));
+      wifiMulti.addAP(STR(WIFI_SSID3), STR(WIFI_PASSWORD3));
+    }
+  #endif
+
+  WiFi.setSleep(false);  // Fixes 4WAY_HANDSHAKE_TIMEOUT on some routers
+  log_d("Connecting to WiFi (multi)...");
+  uint8_t connection_result = WL_IDLE_STATUS;
+  const auto start_time = millis();
+  while (connection_result != WL_CONNECTED && (millis() - start_time) < 20000)
+  {
+    connection_result = wifiMulti.run();
+    delay(100);
+  }
+
   if (connection_result != WL_CONNECTED)
   {
-    log_e("Failed to connect to WiFi. Error code: %d. Restarting...", connection_result);
+    log_e("Failed to connect to any WiFi. Last code: %d. Restarting...", connection_result);
     ESP.restart();
   }
+
   log_i("WiFi connected! IP address: %s", WiFi.localIP().toString().c_str());
+  log_i("Connected to SSID: %s", WiFi.SSID().c_str());
 
   log_i("Local IP address: %s", WiFi.localIP().toString().c_str());
   log_d("Signal strength: %d dBm", WiFi.RSSI());
@@ -1054,15 +1072,45 @@ void setup()
   server.collectHeaders(headerkeys, 1);
 
   server.on("/", HTTP_ANY, handleRoot);
-  server.begin();
+   server.begin();
+
+  // Spawn the web server on its own FreeRTOS task to avoid deadlock
+  // when the Xiaozhi client makes HTTP POST requests to localhost
+  xTaskCreatePinnedToCore(
+    serverTask,     // Task function
+    "ServerTask",   // Name
+    8192,           // Stack size
+    NULL,           // Parameter
+    1,              // Priority
+    NULL,           // Task handle
+    0               // Core 0 (Arduino runs on core 1 by default)
+  );
+
+  // === Start Xiaozhi MCP WebSocket client ===
+    if (strlen(XIAOZHI_MCP_ENDPOINT) > 0) {
+    log_i("Starting Xiaozhi MCP client...");
+    xiaozhiMcpClient.begin(XIAOZHI_MCP_ENDPOINT);
+  } else {
+    log_w("XIAOZHI_MCP_ENDPOINT is empty - Xiaozhi client disabled");
+  }
 }
 
 void loop()
 {
-  // Handle web server requests only if WiFi is connected
+  // Pump the Xiaozhi WebSocket client
   if (WiFi.status() == WL_CONNECTED)
-    server.handleClient();
+    xiaozhiMcpClient.loop();
 
   // Handle OTA (works even with WiFi issues for recovery)
   ArduinoOTA.handle();
+}
+
+// FreeRTOS task that runs the web server independently
+void serverTask(void* parameter) {
+  for (;;) {
+    if (WiFi.status() == WL_CONNECTED) {
+      server.handleClient();
+    }
+    delay(1);
+  }
 }

@@ -1,3 +1,8 @@
-./*.*
-.*
-*.log
+.pio/
+.env
+logs/
+*.bin
+*.elf
+*.map
+ws_traffic.log
+.vscode/
