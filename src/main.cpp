@@ -1,5 +1,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <HTTPClient.h>
 #include <WiFiMulti.h>
 #include <ESPmDNS.h>
 #include <WebServer.h>
@@ -395,27 +397,8 @@ void tool_capture(JsonObject arguments, mcp_response &response)
   }
   // === End flash LED control ===
 
-  // Resolve the requested capture resolution from the frame_size argument (enum)
+   // Force resolution from settings.h (ignore LLM's request for VGA)
   auto capture_framesize = MCP_CAPTURE_FRAMESIZE;
-  if (!arguments["frame_size"].isNull())
-  {
-    auto frame_size_it = frame_sizes.find(arguments["frame_size"].as<std::string>());
-    if (frame_size_it == frame_sizes.end())
-    {
-      std::string valid_options;
-      for (const auto &entry : frame_sizes)
-      {
-        if (!valid_options.empty())
-          valid_options += ", ";
-        valid_options += entry.first;
-      }
-      mcp_schema_error(response)
-          .code(error_code::invalid_params)
-          .message("Invalid frame_size. Valid options: " + valid_options + ".");
-      return;
-    }
-    capture_framesize = frame_size_it->second;
-  }
 
   // Resolve the requested JPEG quality (1-100) from the quality argument
   auto capture_quality = MCP_CAPTURE_JPEG_QUALITY;
@@ -603,14 +586,92 @@ void tool_capture(JsonObject arguments, mcp_response &response)
       std::to_string(fb_width) + "x" + std::to_string(fb_height) + ", Size: " +
       std::to_string(base64_image.length()) + " bytes (base64 encoded)";
 
+  // === Send image to Google Gemini for free analysis ===
+  String geminiAnalysis = "Photo captured. Analyzing image...";
+  
+  #ifdef GEMINI_API_KEY
+  {
+    WiFiClientSecure geminiClient;
+    geminiClient.setInsecure();
+    geminiClient.setTimeout(30000);
+    HTTPClient geminiHttp;
+    
+    String geminiUrl = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=";
+    geminiUrl += GEMINI_API_KEY;
+    
+    Serial.printf("GEMINI: Free heap before call: %u\n", ESP.getFreeHeap());
+    Serial.printf("GEMINI: Base64 image size: %u\n", base64_image.length());
+    
+    if (geminiHttp.begin(geminiClient, geminiUrl)) {
+      geminiHttp.addHeader("Content-Type", "application/json");
+      
+      String payload = "{\"contents\":[{\"parts\":[{\"text\":\"You are an educational tutor. Analyze this photo. If it is homework, read the text and identify the subject. If it is a chessboard, identify the pieces. Respond concisely in English.\"},{\"inline_data\":{\"mime_type\":\"image/jpeg\",\"data\":\"";
+      payload += base64_image.c_str();
+      payload += "\"}}]}]}";
+      
+      Serial.printf("GEMINI: Payload size: %u bytes\n", payload.length());
+      
+      // Retry up to 3 times on timeout, 503, or 404 (Google API can be flaky)
+      int httpCode = -1;
+      String geminiResp = "";
+      for (int retry = 0; retry < 3; retry++) {
+        httpCode = geminiHttp.POST(payload);
+        Serial.printf("GEMINI: Attempt %d - HTTP code: %d\n", retry + 1, httpCode);
+        
+        if (httpCode == 200) {
+          geminiResp = geminiHttp.getString();
+          Serial.printf("GEMINI: Response length: %u bytes\n", geminiResp.length());
+          break;
+        } else {
+          // Print the response body for ALL errors
+          String errBody = geminiHttp.getString();
+          Serial.printf("GEMINI: Error response: %.300s\n", errBody.c_str());
+          
+          if (httpCode == 503 || httpCode == -11 || httpCode == 404) {
+            Serial.printf("GEMINI: Retrying in 3 seconds...\n");
+            delay(3000);
+          } else {
+            break;
+          }
+        }
+      }
+      
+      if (httpCode == 200 && geminiResp.length() > 0) {
+        Serial.printf("GEMINI: Response (first 200 chars): %.200s\n", geminiResp.c_str());
+        JsonDocument doc;
+        DeserializationError err = deserializeJson(doc, geminiResp);
+        if (err == DeserializationError::Ok) {
+          const char* aiText = doc["candidates"][0]["content"]["parts"][0]["text"];
+          if (aiText) {
+            geminiAnalysis = "Image Analysis: " + String(aiText);
+          }
+        } else {
+          Serial.println("GEMINI: JSON parse error!");
+        }
+      } else {
+        Serial.printf("GEMINI: All retries failed. Last code: %d\n", httpCode);
+        if (httpCode == 429) {
+          geminiAnalysis = "The image analysis service is busy. Please wait 2 minutes and try again.";
+        } else if (httpCode == 503) {
+          geminiAnalysis = "The AI service is overloaded. Please wait 30 seconds and try again.";
+        } else if (httpCode == -11) {
+          geminiAnalysis = "The image analysis timed out. Please try again in a moment.";
+        } else if (httpCode == 404) {
+          geminiAnalysis = "The AI service is temporarily unavailable. Please try again later.";
+        } else {
+          geminiAnalysis = "Photo captured, but analysis failed. Please try again.";
+        }
+      }
+      geminiHttp.end();
+    } else {
+      Serial.println("GEMINI: Failed to begin HTTP connection");
+    }
+  }
+  #endif
+
   mcp_response_schema r(response);
-  r.text(text)
-      .field("image", base64_image)
-      .field("format", pixel_format_name)
-      .field("width", fb_width)
-      .field("height", fb_height)
-      .field("mimeType", capture_pixelformat == PIXFORMAT_JPEG ? "image/jpeg" : "image/x-raw");
-  // The JSON document already holds its own copy of the image data
+  r.text(geminiAnalysis.c_str());
+  
   base64_image.clear();
 
   // === Turn off flash LED after capture ===

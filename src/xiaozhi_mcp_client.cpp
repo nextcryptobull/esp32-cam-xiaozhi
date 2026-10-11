@@ -268,7 +268,7 @@ bool XiaozhiMcpClient::sendWsText(const String& payload) {
         frame[headerLen + 4 + i] = payload[i] ^ mask[i % 4];
     }
 
-        // Write in chunks — TLS buffer is 16 KB, so write 8 KB at a time
+        // Write in chunks ??? TLS buffer is 16 KB, so write 8 KB at a time
     size_t totalWritten = 0;
     size_t chunkSize = 8192;  // 8 KB chunks
     while (totalWritten < totalLen) {

@@ -2,6 +2,7 @@
 
 #include <WiFiClientSecure.h>
 #include <ArduinoJson.h>
+#include <functional>
 
 using McpToolHandler = std::function<JsonDocument(const JsonObject& args)>;
 
