@@ -3,14 +3,15 @@ The ESP32-CAM connects directly to xiaozhi.me via WebSocket. No bridge needed.
 
 ## Features
 
-- ✅ Native WebSocket client (custom C++ implementation)
-- ✅ TLS to Cloudflare (WiFiClientSecure)
-- ✅ MCP 2024-11-05 protocol (initialize, tools/list, tools/call, ping, notifications)
-- ✅ Multi-network WiFi (WiFiMulti — up to 3 networks)
-- ✅ HTTP forwarding to local MCP server
-- ✅ Optimized photo size (QVGA 320×240 ~6KB JPEG)
-- ✅ Stable connection with ping handling
-- ✅ OTA firmware updates
+✅ Native WebSocket client (custom C++ implementation)
+✅ TLS to Cloudflare (WiFiClientSecure)
+✅ MCP 2024-11-05 protocol (initialize, tools/list, tools/call, ping, notifications)
+✅ Multi-network WiFi (WiFiMulti — up to 3 networks)
+✅ HTTP forwarding to local MCP server
+✅ Optimized photo size (HVGA 480x320 ~12KB JPEG)
+✅ Stable connection with ping handling
+✅ OTA firmware updates
+✅ Chess game assistance (Board recognition + strategy explanation)
 
 ## Hardware
 

@@ -300,6 +300,8 @@ void handle_tools_list(mcp_response &response)
       .enum_table("pixelformat", "Pixel format for the captured photo", pixel_formats, [](pixformat_t fmt)
                   { return fmt == MCP_CAPTURE_PIXELFORMAT; });
 
+  #if 0  // Disabled WiFi, system, and GPIO tools to reduce MCP response size
+
   // Add WiFi status tool
   tool_schema wifi_tool(tools.add<JsonObject>(), "wifi_status",
                         "Gets current WiFi connection status and network information. "
@@ -341,6 +343,7 @@ void handle_tools_list(mcp_response &response)
       .any("value", "Required for output modes. do: true (HIGH) or false (LOW). ao: 0-100 (duty cycle percentage; float accepted, e.g. 0.5 = 0.5%).")
       .required("pin")
       .required("mode");
+#endif  // End of disabled tools
 }
 
 void tool_led(JsonObject arguments, mcp_response &response)
@@ -385,6 +388,13 @@ void tool_flash(JsonObject arguments, mcp_response &response)
 
 void tool_capture(JsonObject arguments, mcp_response &response)
 {
+  // === Force flash LED ON for better lighting ===
+  if (has_flash_led) {
+    digitalWrite(FLASH_GPIO, FLASH_ON_LEVEL);
+    delay(300);  // Wait for camera sensor to adjust exposure to the brighter light
+  }
+  // === End flash LED control ===
+
   // Resolve the requested capture resolution from the frame_size argument (enum)
   auto capture_framesize = MCP_CAPTURE_FRAMESIZE;
   if (!arguments["frame_size"].isNull())
@@ -602,6 +612,12 @@ void tool_capture(JsonObject arguments, mcp_response &response)
       .field("mimeType", capture_pixelformat == PIXFORMAT_JPEG ? "image/jpeg" : "image/x-raw");
   // The JSON document already holds its own copy of the image data
   base64_image.clear();
+
+  // === Turn off flash LED after capture ===
+  if (has_flash_led) {
+    digitalWrite(FLASH_GPIO, !FLASH_ON_LEVEL);
+  }
+  // === End flash LED control ===
 }
 
 void tool_wifi_status(mcp_response &response)

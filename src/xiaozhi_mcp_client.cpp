@@ -204,7 +204,7 @@ String XiaozhiMcpClient::readWsFrame() {
     for (uint64_t i = 0; i < payloadLen; i++) {
         while (_wifiClient.available() == 0) {
             delay(1);
-            if (millis() > _lastKeepalive + 30000) return "";
+            if (millis() > _lastKeepalive + 60000) return "";
         }
         uint8_t c = _wifiClient.read();
         if (masked) c = c ^ mask[i % 4];
